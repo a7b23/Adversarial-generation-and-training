@@ -8,3 +8,4 @@ The test accuracy for the network over MNIST is 99% whereas the accuracy over ad
 
 
 
+J˜(θ, x, y) = αJ(θ, x, y) + (1 − α)J(θ, x + sign (∇xJ(θ, x, y)).
