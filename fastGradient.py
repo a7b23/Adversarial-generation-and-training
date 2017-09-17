@@ -7,8 +7,8 @@ from tensorflow.examples.tutorials.mnist import input_data
 # import scipy.misc
 from util import *
 
-def MnistNetwork(input,keep_prob,scope='Mnist',reuse = False):
-	with tf.variable_scope(scope,reuse = reuse) as sc :
+def MnistNetwork(input,keep_prob,scope='Mnist'):
+	with tf.variable_scope(scope,[input]) as sc :
 		with slim.arg_scope([slim.conv2d,slim.fully_connected],
 										  biases_initializer=tf.constant_initializer(0.0),
 										  activation_fn=tf.nn.relu):
@@ -30,10 +30,18 @@ def loss(prediction,output):
 	accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 	return cross_entropy,accuracy
 
-def getAdversarial(x,grad,eps) :
-	t1 = eps*tf.cast(grad > 0,dtype = tf.float32)
-	t2 = -eps*tf.cast(grad < 0,dtype = tf.float32)
-	return x + t1+t2
+def generateAdversarialExamples(grad_op,test_data,test_labels,eps) :
+	test_grads = sess.run(grad_op,feed_dict = {x:test_data,y_:test_labels,keep_prob: 1.0})[0]
+	modified_images = []
+	for i in range(len(test_grads)) :
+		im = test_data[i]
+		grad_im = test_grads[i]
+		t1 = eps*(grad_im>0)
+		t2 = -eps*(grad_im<0)
+		im_mod = im +t1 + t2
+		modified_images.append(im_mod)
+	modified_images = np.array(modified_images)
+	return modified_images
 
 def getMisClassificationConfidence(logits,labels) :
 	logit_max = tf.cast(tf.reduce_max(logits,1),tf.float32)
@@ -43,8 +51,6 @@ def getMisClassificationConfidence(logits,labels) :
 	total = tf.reduce_sum(unequals)
 	return tf.cond(tf.equal(total,tf.constant(0.0)),lambda: tf.constant(0.0),lambda: sum_confidence/total)
 
-eps = 0.1
-alpha = 0.5
 with tf.Graph().as_default():
 		
 	mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)  
@@ -52,31 +58,12 @@ with tf.Graph().as_default():
 	y_ = tf.placeholder(tf.float32, shape=[None, 10])
 	keep_prob = tf.placeholder(tf.float32)
 	x_image = tf.reshape(x, [-1,28,28,1])
-	y_conv=MnistNetwork(x_image,keep_prob)
-
+	y_conv=MnistNetwork(x_image,keep_prob,scope='Mnist')
 
 	cross_entropy,accuracy=loss(y_conv,y_)
 	miss_class_conf = getMisClassificationConfidence(y_conv,y_)
-
 	grads = tf.gradients(cross_entropy,x)
-
-	x_adv = tf.reshape(getAdversarial(x,grads[0],eps),[-1,28,28,1])
-
-	y_conv_mod=MnistNetwork(x_adv,keep_prob,reuse = True)
-
-	cross_entropy_mod,accuracy_mod=loss(y_conv_mod,y_)
-
-	model_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'Mnist')
-
-	grad1 = tf.gradients(cross_entropy,model_vars)
-	grad2 = tf.gradients(cross_entropy_mod,model_vars)
-	total_grad = []
-	for i in range(len(grad1)) :
-		total_grad.append(alpha*grad1[i] + (1-alpha)*grad2[i])
-	
-	trainer = tf.train.AdamOptimizer(1e-4)
-	train_step = trainer.apply_gradients(zip(total_grad,model_vars))
-	
+	train_step = tf.train.AdamOptimizer(1e-4).minimize(cross_entropy)
 
 	sess = tf.InteractiveSession()
 	sess.run(tf.global_variables_initializer())
@@ -91,17 +78,22 @@ with tf.Graph().as_default():
 	test_data =  mnist.test.images
 	test_labels = mnist.test.labels
 
+
 	test_acc,mis_class = sess.run([accuracy,miss_class_conf],feed_dict={x: mnist.test.images, y_: mnist.test.labels, keep_prob: 1.0})
 	print("test accuracy is %g and miss classification confidence is %g"%(test_acc,mis_class))
-		
+
 	
-	modified_images = np.genfromtxt('modifiedImData.txt')
-	test_labels = np.genfromtxt('modifiedImLabel.txt')
+	eps = 0.1
+	
+	modified_images = generateAdversarialExamples(grads,test_data,test_labels,eps)
+	np.savetxt('modifiedImData.txt',modified_images)
+	np.savetxt('modifiedImLabel.txt',test_labels)
 
 	test_acc,mis_class = sess.run([accuracy,miss_class_conf],feed_dict={x: modified_images, y_: test_labels, keep_prob: 1.0})
 	print("test accuracy over adversarial examples is %g and mis classification confidence is %g"%(test_acc,mis_class))
 
 
-	print("test accuracy over the generated adversarial examples is %g"%accuracy_mod.eval(feed_dict={
-		x: mnist.test.images, y_: mnist.test.labels, keep_prob: 1.0}))
-	
+	original_samples = np.reshape(test_data[0:196],[-1,28,28,1])
+	modified_samples = np.reshape(modified_images[0:196],[-1,28,28,1])
+	save_images(original_samples, image_manifold_size(original_samples.shape[0]), 'originalImages.png')
+	save_images(modified_samples, image_manifold_size(modified_samples.shape[0]), 'adversarialImages.png')
